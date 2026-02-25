@@ -1,0 +1,126 @@
+{
+  "name": "claude-code-dashboard",
+  "displayName": "Claude Code Dashboard",
+  "description": "Dashboard for managing Claude Code terminal sessions with model selection",
+  "version": "0.1.0",
+  "publisher": "rochai",
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rochai-esh/claude-code-dashboard"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-code-dashboard",
+          "title": "Claude Code Dashboard",
+          "icon": "resources/icons/claude-dashboard.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-code-dashboard": [
+        {
+          "id": "claudeCodeDashboard.welcome",
+          "name": "Dashboard",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeCodeDashboard.openDashboard",
+        "title": "Claude Dashboard: Open Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "claudeCodeDashboard.newClaudeTerminal",
+        "title": "Claude Dashboard: New Claude Code Terminal",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudeCodeDashboard.newClaudeTerminalWithModel",
+        "title": "Claude Dashboard: New Claude Code Terminal (Pick Model)",
+        "icon": "$(symbol-enum)"
+      },
+      {
+        "command": "claudeCodeDashboard.refreshTerminals",
+        "title": "Claude Dashboard: Refresh Terminals",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeCodeDashboard.closeTerminal",
+        "title": "Close Terminal",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "claudeCodeDashboard.focusTerminal",
+        "title": "Focus Terminal",
+        "icon": "$(terminal)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeCodeDashboard.openDashboard",
+          "when": "view == claudeCodeDashboard.welcome",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeCodeDashboard.newClaudeTerminal",
+          "when": "view == claudeCodeDashboard.welcome",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudeCodeDashboard.newClaudeTerminalWithModel",
+          "when": "view == claudeCodeDashboard.welcome",
+          "group": "navigation@3"
+        },
+        {
+          "command": "claudeCodeDashboard.refreshTerminals",
+          "when": "view == claudeCodeDashboard.welcome",
+          "group": "navigation@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Code Dashboard",
+      "properties": {
+        "claudeCodeDashboard.defaultModel": {
+          "type": "string",
+          "enum": ["opus", "sonnet", "haiku"],
+          "default": "sonnet",
+          "description": "Default Claude model for new terminals."
+        },
+        "claudeCodeDashboard.claudeCliPath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path to the Claude Code CLI executable."
+        },
+        "claudeCodeDashboard.autoDetectClaudeTerminals": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect terminals running Claude Code."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.94.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0"
+  }
+}
