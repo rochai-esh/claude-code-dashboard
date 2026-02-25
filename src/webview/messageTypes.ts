@@ -3,6 +3,7 @@ import type { ClaudeModel, TerminalStatus } from '../types'
 export interface TerminalCardData {
   id: string
   label: string
+  customName?: string
   isClaudeManaged: boolean
   model?: ClaudeModel
   status: TerminalStatus
@@ -39,6 +40,12 @@ export interface FocusTerminalMessage {
   terminalId: string
 }
 
+export interface RenameTerminalMessage {
+  type: 'renameTerminal'
+  terminalId: string
+  name: string
+}
+
 export interface RequestRefreshMessage {
   type: 'requestRefresh'
 }
@@ -47,4 +54,5 @@ export type WebviewToExtensionMessage =
   | NewTerminalMessage
   | CloseTerminalMessage
   | FocusTerminalMessage
+  | RenameTerminalMessage
   | RequestRefreshMessage

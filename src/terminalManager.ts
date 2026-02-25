@@ -11,17 +11,20 @@ export class TerminalManager implements vscode.Disposable {
   private terminals: Map<string, TrackedTerminal> = new Map()
   private nextId = 1
   private disposables: vscode.Disposable[] = []
+  private activeTerminal: vscode.Terminal | undefined
 
   private readonly _onDidChangeTerminals = new vscode.EventEmitter<void>()
   public readonly onDidChangeTerminals = this._onDidChangeTerminals.event
 
   constructor() {
+    this.activeTerminal = vscode.window.activeTerminal
     this.syncExistingTerminals()
 
     this.disposables.push(
       vscode.window.onDidOpenTerminal((t) => this.handleTerminalOpen(t)),
       vscode.window.onDidCloseTerminal((t) => this.handleTerminalClose(t)),
       vscode.window.onDidChangeTerminalState((t) => this.handleTerminalStateChange(t)),
+      vscode.window.onDidChangeActiveTerminal((t) => this.handleActiveTerminalChange(t)),
     )
   }
 
@@ -37,6 +40,8 @@ export class TerminalManager implements vscode.Disposable {
     const terminal = vscode.window.createTerminal({ name: terminalName })
     const tracked = this.trackTerminal(terminal, true, model)
 
+    // Wait for the shell process to be ready before sending the command
+    await terminal.processId
     terminal.sendText(`${cliPath} --model ${model}`, true)
     terminal.show()
 
@@ -55,6 +60,14 @@ export class TerminalManager implements vscode.Disposable {
     const tracked = this.terminals.get(id)
     if (tracked) {
       tracked.terminal.show()
+    }
+  }
+
+  renameTerminal(id: string, name: string): void {
+    const tracked = this.terminals.get(id)
+    if (tracked) {
+      tracked.customName = name || undefined
+      this._onDidChangeTerminals.fire()
     }
   }
 
@@ -89,14 +102,37 @@ export class TerminalManager implements vscode.Disposable {
   private handleTerminalStateChange(terminal: vscode.Terminal): void {
     const tracked = this.findByVscodeTerminal(terminal)
     if (tracked) {
-      if (terminal.state.isInteractedWith) {
-        tracked.status = tracked.isClaudeManaged
-          ? TerminalStatus.Active
-          : TerminalStatus.Plain
-      }
       tracked.label = terminal.name
+      tracked.status = this.computeStatus(tracked)
     }
     this._onDidChangeTerminals.fire()
+  }
+
+  private handleActiveTerminalChange(terminal: vscode.Terminal | undefined): void {
+    this.activeTerminal = terminal
+    this.refreshStatuses()
+    this._onDidChangeTerminals.fire()
+  }
+
+  private refreshStatuses(): void {
+    for (const tracked of this.terminals.values()) {
+      tracked.status = this.computeStatus(tracked)
+    }
+  }
+
+  private computeStatus(tracked: TrackedTerminal): TerminalStatus {
+    // Currently focused terminal is Active
+    if (this.activeTerminal && tracked.terminal === this.activeTerminal) {
+      return TerminalStatus.Active
+    }
+
+    // Claude terminal that has been started but not focused → Pending
+    if (tracked.isClaudeManaged && tracked.terminal.state.isInteractedWith) {
+      return TerminalStatus.Pending
+    }
+
+    // Everything else is Idle
+    return TerminalStatus.Idle
   }
 
   private trackTerminal(
@@ -109,12 +145,13 @@ export class TerminalManager implements vscode.Disposable {
       terminal,
       isClaudeManaged,
       model,
-      status: isClaudeManaged ? TerminalStatus.Idle : TerminalStatus.Plain,
+      status: TerminalStatus.Idle,
       id,
       label: terminal.name,
       createdAt: Date.now(),
     }
     this.terminals.set(id, tracked)
+    tracked.status = this.computeStatus(tracked)
     return tracked
   }
 
