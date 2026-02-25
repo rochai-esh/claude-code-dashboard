@@ -92,6 +92,9 @@ export class DashboardPanel implements vscode.Disposable {
       case 'focusTerminal':
         this.manager.focusTerminal(msg.terminalId)
         break
+      case 'renameTerminal':
+        this.manager.renameTerminal(msg.terminalId, msg.name)
+        break
       case 'requestRefresh':
         this.sendModelsUpdate()
         this.sendTerminalsUpdate()

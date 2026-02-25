@@ -8,10 +8,9 @@ export enum ClaudeModel {
 }
 
 export enum TerminalStatus {
-  Plain = 'plain',
   Idle = 'idle',
   Active = 'active',
-  Exited = 'exited',
+  Pending = 'pending',
 }
 
 export interface TrackedTerminal {
@@ -21,6 +20,7 @@ export interface TrackedTerminal {
   status: TerminalStatus
   id: string
   label: string
+  customName?: string
   createdAt: number
 }
 
@@ -41,6 +41,7 @@ export function toCardData(t: TrackedTerminal): TerminalCardData {
   return {
     id: t.id,
     label: t.label,
+    customName: t.customName,
     isClaudeManaged: t.isClaudeManaged,
     model: t.model,
     status: t.status,

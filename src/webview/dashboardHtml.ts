@@ -121,15 +121,11 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
       background: linear-gradient(135deg, rgba(40,167,69,0.12) 0%, rgba(40,167,69,0.04) 100%);
       border: 1px solid rgba(40,167,69,0.25);
     }
-    .card-idle {
+    .card-pending {
       background: linear-gradient(135deg, rgba(255,193,7,0.12) 0%, rgba(255,193,7,0.04) 100%);
       border: 1px solid rgba(255,193,7,0.25);
     }
-    .card-exited {
-      background: linear-gradient(135deg, rgba(220,53,69,0.12) 0%, rgba(220,53,69,0.04) 100%);
-      border: 1px solid rgba(220,53,69,0.25);
-    }
-    .card-plain {
+    .card-idle {
       background: var(--vscode-editor-background);
       border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
     }
@@ -149,6 +145,26 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
       text-overflow: ellipsis;
       flex: 1;
       margin-right: 8px;
+      cursor: text;
+      border-bottom: 1px dashed transparent;
+      padding-bottom: 1px;
+    }
+    .card-title:hover {
+      border-bottom-color: var(--vscode-descriptionForeground);
+    }
+
+    .rename-input {
+      font-weight: 600;
+      font-size: 1em;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-focusBorder);
+      border-radius: 3px;
+      padding: 1px 4px;
+      outline: none;
+      flex: 1;
+      margin-right: 8px;
+      font-family: var(--vscode-font-family);
     }
 
     .card-actions {
@@ -192,9 +208,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
       flex-shrink: 0;
     }
     .status-dot.active { background: #28a745; }
-    .status-dot.idle { background: #ffc107; }
-    .status-dot.exited { background: #dc3545; }
-    .status-dot.plain { background: #6c757d; }
+    .status-dot.pending { background: #ffc107; }
+    .status-dot.idle { background: #6c757d; }
 
     .badge {
       display: inline-block;
@@ -280,6 +295,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
     const emptyNewTerminalBtn = document.getElementById('emptyNewTerminalBtn');
     const refreshBtn = document.getElementById('refreshBtn');
 
+    let currentTerminals = [];
+
     function createNewTerminal() {
       vscode.postMessage({ type: 'newTerminal', model: modelSelect.value });
     }
@@ -293,9 +310,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
     function statusLabel(status) {
       switch (status) {
         case 'active': return 'Active';
+        case 'pending': return 'Pending';
         case 'idle': return 'Idle';
-        case 'exited': return 'Exited';
-        case 'plain': return 'Terminal';
         default: return status;
       }
     }
@@ -308,13 +324,48 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
     function cardClass(status) {
       switch (status) {
         case 'active': return 'card-active';
+        case 'pending': return 'card-pending';
         case 'idle': return 'card-idle';
-        case 'exited': return 'card-exited';
-        default: return 'card-plain';
+        default: return 'card-idle';
       }
     }
 
+    function startRename(id, currentName) {
+      const titleEl = cardGrid.querySelector('.card-title[data-id="' + id + '"]');
+      if (!titleEl) return;
+
+      const input = document.createElement('input');
+      input.className = 'rename-input';
+      input.value = currentName;
+      input.dataset.id = id;
+      titleEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let committed = false;
+      function commitRename() {
+        if (committed) return;
+        committed = true;
+        const newName = input.value.trim();
+        vscode.postMessage({ type: 'renameTerminal', terminalId: id, name: newName });
+      }
+
+      input.addEventListener('blur', commitRename);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        }
+        if (e.key === 'Escape') {
+          committed = true;
+          vscode.postMessage({ type: 'requestRefresh' });
+        }
+      });
+    }
+
     function renderTerminals(terminals) {
+      currentTerminals = terminals;
+
       if (!terminals.length) {
         cardGrid.style.display = 'none';
         emptyState.style.display = 'flex';
@@ -330,13 +381,14 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
         card.className = 'card ' + cardClass(t.status);
         card.dataset.id = t.id;
 
+        const displayName = t.customName || t.label;
         const modelBadge = t.isClaudeManaged && t.model
           ? '<span class="badge badge-model">' + escapeHtml(capitalize(t.model)) + '</span>'
           : '';
 
         card.innerHTML =
           '<div class="card-header">' +
-            '<span class="card-title">' + escapeHtml(t.label) + '</span>' +
+            '<span class="card-title" data-id="' + t.id + '">' + escapeHtml(displayName) + '</span>' +
             '<div class="card-actions">' +
               '<button class="card-action-btn focus-btn" data-id="' + t.id + '" title="Focus terminal">&#x25B6;</button>' +
               '<button class="card-action-btn close-btn" data-id="' + t.id + '" title="Close terminal">&#x2715;</button>' +
@@ -351,6 +403,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
 
         card.addEventListener('click', (e) => {
           if (e.target.closest('.card-action-btn')) return;
+          if (e.target.closest('.card-title')) return;
+          if (e.target.closest('.rename-input')) return;
           vscode.postMessage({ type: 'focusTerminal', terminalId: t.id });
         });
 
@@ -358,8 +412,19 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
       });
     }
 
-    // Event delegation for action buttons
+    // Event delegation for action buttons and title clicks
     cardGrid.addEventListener('click', (e) => {
+      const titleEl = e.target.closest('.card-title');
+      if (titleEl) {
+        e.stopPropagation();
+        const id = titleEl.dataset.id;
+        const terminal = currentTerminals.find(t => t.id === id);
+        if (terminal) {
+          startRename(id, terminal.customName || terminal.label);
+        }
+        return;
+      }
+
       const focusBtn = e.target.closest('.focus-btn');
       if (focusBtn) {
         e.stopPropagation();
