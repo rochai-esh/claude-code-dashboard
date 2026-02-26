@@ -22,6 +22,8 @@ export interface TrackedTerminal {
   label: string
   customName?: string
   createdAt: number
+  claudeRunning: boolean
+  lastOutputTime: number
 }
 
 export const CLAUDE_TERMINAL_NAME_PREFIX = 'Claude Code'

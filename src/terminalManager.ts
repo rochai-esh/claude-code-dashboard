@@ -7,24 +7,27 @@ import {
   MODEL_DISPLAY_NAMES,
 } from './types'
 
+// How long after the last output burst before transitioning Active → Pending
+const OUTPUT_ACTIVE_MS = 1500
+
 export class TerminalManager implements vscode.Disposable {
   private terminals: Map<string, TrackedTerminal> = new Map()
   private nextId = 1
   private disposables: vscode.Disposable[] = []
-  private activeTerminal: vscode.Terminal | undefined
+  private outputDebounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
   private readonly _onDidChangeTerminals = new vscode.EventEmitter<void>()
   public readonly onDidChangeTerminals = this._onDidChangeTerminals.event
 
   constructor() {
-    this.activeTerminal = vscode.window.activeTerminal
     this.syncExistingTerminals()
 
     this.disposables.push(
       vscode.window.onDidOpenTerminal((t) => this.handleTerminalOpen(t)),
       vscode.window.onDidCloseTerminal((t) => this.handleTerminalClose(t)),
       vscode.window.onDidChangeTerminalState((t) => this.handleTerminalStateChange(t)),
-      vscode.window.onDidChangeActiveTerminal((t) => this.handleActiveTerminalChange(t)),
+      vscode.window.onDidStartTerminalShellExecution((e) => this.handleShellExecutionStart(e)),
+      vscode.window.onDidEndTerminalShellExecution((e) => this.handleShellExecutionEnd(e)),
     )
   }
 
@@ -43,8 +46,12 @@ export class TerminalManager implements vscode.Disposable {
     // Wait for the shell process to be ready before sending the command
     await terminal.processId
     terminal.sendText(`${cliPath} --model ${model}`, true)
-    terminal.show()
 
+    // Claude is starting — show as Pending (waiting for first user input)
+    tracked.claudeRunning = true
+    tracked.status = TerminalStatus.Pending
+
+    terminal.show()
     this._onDidChangeTerminals.fire()
     return tracked
   }
@@ -94,6 +101,11 @@ export class TerminalManager implements vscode.Disposable {
   private handleTerminalClose(terminal: vscode.Terminal): void {
     const tracked = this.findByVscodeTerminal(terminal)
     if (tracked) {
+      const timer = this.outputDebounceTimers.get(tracked.id)
+      if (timer) {
+        clearTimeout(timer)
+        this.outputDebounceTimers.delete(tracked.id)
+      }
       this.terminals.delete(tracked.id)
     }
     this._onDidChangeTerminals.fire()
@@ -103,36 +115,99 @@ export class TerminalManager implements vscode.Disposable {
     const tracked = this.findByVscodeTerminal(terminal)
     if (tracked) {
       tracked.label = terminal.name
-      tracked.status = this.computeStatus(tracked)
     }
     this._onDidChangeTerminals.fire()
   }
 
-  private handleActiveTerminalChange(terminal: vscode.Terminal | undefined): void {
-    this.activeTerminal = terminal
-    this.refreshStatuses()
-    this._onDidChangeTerminals.fire()
+  // Fired whenever data is written to the terminal output buffer.
+  // We use this to distinguish Active (output flowing) from Pending (quiet but running).
+  private handleTerminalData(terminal: vscode.Terminal, _data: string): void {
+    const tracked = this.findByVscodeTerminal(terminal)
+    if (!tracked || !tracked.isClaudeManaged || !tracked.claudeRunning) return
+
+    tracked.lastOutputTime = Date.now()
+
+    if (tracked.status !== TerminalStatus.Active) {
+      tracked.status = TerminalStatus.Active
+      this._onDidChangeTerminals.fire()
+    }
+
+    // Restart the debounce — when output stops for OUTPUT_ACTIVE_MS, transition to Pending
+    this.resetOutputDebounce(tracked)
   }
 
-  private refreshStatuses(): void {
-    for (const tracked of this.terminals.values()) {
-      tracked.status = this.computeStatus(tracked)
+  private resetOutputDebounce(tracked: TrackedTerminal): void {
+    const existing = this.outputDebounceTimers.get(tracked.id)
+    if (existing) clearTimeout(existing)
+
+    const timer = setTimeout(() => {
+      this.outputDebounceTimers.delete(tracked.id)
+      if (tracked.claudeRunning && tracked.status === TerminalStatus.Active) {
+        tracked.status = TerminalStatus.Pending
+        this._onDidChangeTerminals.fire()
+      }
+    }, OUTPUT_ACTIVE_MS)
+
+    this.outputDebounceTimers.set(tracked.id, timer)
+  }
+
+  // Shell integration: fires when the shell begins executing a command.
+  // Catches the case where the user manually types `claude` in an existing terminal.
+  private handleShellExecutionStart(event: vscode.TerminalShellExecutionStartEvent): void {
+    const tracked = this.findByVscodeTerminal(event.terminal)
+    if (!tracked || !tracked.isClaudeManaged) return
+
+    const config = vscode.workspace.getConfiguration('claudeCodeDashboard')
+    const cliPath = config.get<string>('claudeCliPath', 'claude')
+    const cmdLine = event.execution.commandLine?.value?.trim() ?? ''
+
+    // Only react if the command being run is the claude CLI
+    if (cmdLine === cliPath || cmdLine.startsWith(cliPath + ' ')) {
+      tracked.claudeRunning = true
+      if (tracked.status === TerminalStatus.Idle) {
+        tracked.status = TerminalStatus.Pending
+        this._onDidChangeTerminals.fire()
+      }
+
+      // Read execution output stream to detect activity (Active vs Pending)
+      this.readExecutionOutput(tracked, event.execution)
     }
   }
 
-  private computeStatus(tracked: TrackedTerminal): TerminalStatus {
-    // Currently focused terminal is Active
-    if (this.activeTerminal && tracked.terminal === this.activeTerminal) {
-      return TerminalStatus.Active
+  private async readExecutionOutput(
+    tracked: TrackedTerminal,
+    execution: vscode.TerminalShellExecution,
+  ): Promise<void> {
+    try {
+      for await (const data of execution.read()) {
+        this.handleTerminalData(tracked.terminal, data)
+      }
+    } catch {
+      // Stream ends when terminal closes or execution finishes
     }
+  }
 
-    // Claude terminal that has been started but not focused → Pending
-    if (tracked.isClaudeManaged && tracked.terminal.state.isInteractedWith) {
-      return TerminalStatus.Pending
+  // Shell integration: fires when the command finishes (i.e. claude process exits).
+  private handleShellExecutionEnd(event: vscode.TerminalShellExecutionEndEvent): void {
+    const tracked = this.findByVscodeTerminal(event.terminal)
+    if (!tracked || !tracked.isClaudeManaged) return
+
+    const config = vscode.workspace.getConfiguration('claudeCodeDashboard')
+    const cliPath = config.get<string>('claudeCliPath', 'claude')
+    const cmdLine = event.execution.commandLine?.value?.trim() ?? ''
+
+    if (cmdLine === cliPath || cmdLine.startsWith(cliPath + ' ')) {
+      tracked.claudeRunning = false
+      tracked.status = TerminalStatus.Idle
+
+      const timer = this.outputDebounceTimers.get(tracked.id)
+      if (timer) {
+        clearTimeout(timer)
+        this.outputDebounceTimers.delete(tracked.id)
+      }
+
+      this._onDidChangeTerminals.fire()
     }
-
-    // Everything else is Idle
-    return TerminalStatus.Idle
   }
 
   private trackTerminal(
@@ -141,17 +216,23 @@ export class TerminalManager implements vscode.Disposable {
     model?: ClaudeModel,
   ): TrackedTerminal {
     const id = String(this.nextId++)
+
+    // Existing claude terminals that have already been interacted with are assumed running
+    const claudeRunning = isClaudeManaged && terminal.state.isInteractedWith
+
     const tracked: TrackedTerminal = {
       terminal,
       isClaudeManaged,
       model,
-      status: TerminalStatus.Idle,
+      status: claudeRunning ? TerminalStatus.Pending : TerminalStatus.Idle,
       id,
       label: terminal.name,
       createdAt: Date.now(),
+      claudeRunning,
+      lastOutputTime: 0,
     }
+
     this.terminals.set(id, tracked)
-    tracked.status = this.computeStatus(tracked)
     return tracked
   }
 
@@ -173,6 +254,10 @@ export class TerminalManager implements vscode.Disposable {
   }
 
   dispose(): void {
+    for (const timer of this.outputDebounceTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.outputDebounceTimers.clear()
     this.disposables.forEach((d) => d.dispose())
     this._onDidChangeTerminals.dispose()
   }

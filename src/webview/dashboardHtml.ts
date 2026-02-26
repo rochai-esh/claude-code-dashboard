@@ -126,8 +126,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
       border: 1px solid rgba(255,193,7,0.25);
     }
     .card-idle {
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+      background: linear-gradient(135deg, rgba(66,133,244,0.12) 0%, rgba(66,133,244,0.04) 100%);
+      border: 1px solid rgba(66,133,244,0.25);
     }
 
     .card-header {
@@ -309,8 +309,8 @@ export function getDashboardHtml(webview: vscode.Webview, nonce: string): string
 
     function statusLabel(status) {
       switch (status) {
-        case 'active': return 'Active';
-        case 'pending': return 'Pending';
+        case 'active': return 'Running';
+        case 'pending': return 'Waiting';
         case 'idle': return 'Idle';
         default: return status;
       }
