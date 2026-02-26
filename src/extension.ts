@@ -80,6 +80,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Auto-open the dashboard on activation
   dashboard.openOrReveal()
+
+  // Auto-create a Claude terminal if none are running
+  const existingClaude = manager.getTrackedTerminals().some((t) => t.isClaudeManaged)
+  if (!existingClaude) {
+    const config = vscode.workspace.getConfiguration('claudeCodeDashboard')
+    const defaultModel = config.get<string>('defaultModel', 'sonnet') as ClaudeModel
+    manager.createClaudeTerminal(defaultModel)
+  }
 }
 
 function resolveTerminalId(arg: unknown): string | undefined {
